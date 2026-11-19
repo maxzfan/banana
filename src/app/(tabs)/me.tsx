@@ -48,6 +48,7 @@ export default function Me() {
         </Text>
       ) : null}
       <Button title="Change status" onPress={() => router.push('/set-status' as Href)} />
+      <Button title="Set up two friends" variant="accent" onPress={() => router.push('/setup/new' as Href)} />
       <Button title="Edit profile" variant="outline" onPress={() => router.push('/edit-profile' as Href)} />
       <Button title="Settings & privacy" variant="outline" onPress={() => router.push('/settings' as Href)} />
     </Screen>

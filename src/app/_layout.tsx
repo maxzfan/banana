@@ -68,6 +68,9 @@ function RootStack() {
           <Stack.Screen name="edit-profile" />
           <Stack.Screen name="settings" />
           <Stack.Screen name="survey/[id]" />
+          <Stack.Screen name="chat/[id]" />
+          <Stack.Screen name="setup/new" />
+          <Stack.Screen name="tonight" options={{ presentation: 'modal' }} />
         </Stack.Protected>
         <Stack.Screen name="index" />
         <Stack.Screen name="i/[token]" />

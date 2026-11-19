@@ -1,4 +1,4 @@
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, type Href } from 'expo-router';
 import { useState } from 'react';
 import { Modal, Pressable, View } from 'react-native';
 
@@ -36,7 +36,8 @@ export default function UserProfile() {
           .maybeSingle(),
       ),
     ]);
-    return { profile, status, link };
+    const matchable = (await unwrap<{ id: string }[]>(supabase.rpc('setup_candidates'))).some((c) => c.id === id);
+    return { profile, status, link, matchable };
   }, [id, userId]);
 
   if (loading) return <Screen><Loading /></Screen>;
@@ -103,6 +104,7 @@ export default function UserProfile() {
           {!link ? <Button title="Add friend" onPress={addFriend} /> : null}
           {link?.state === 'pending' && link.requester_id === userId ? <Button title="Request sent" variant="outline" disabled /> : null}
           {link?.state === 'pending' && link.addressee_id === userId ? <Button title="Accept request" variant="accent" onPress={accept} /> : null}
+          {data?.matchable ? <Button title="Set them up (Banana Split)" variant="accent" onPress={() => router.push(`/setup/new?a=${id}` as Href)} /> : null}
           {link?.state === 'accepted' ? <Button title="Remove friend" variant="outline" onPress={removeFriend} /> : null}
           <View style={{ flexDirection: 'row', gap: Spacing.two }}>
             <Button title="Report" variant="ghost" small style={{ flex: 1 }} onPress={() => setReporting(true)} />

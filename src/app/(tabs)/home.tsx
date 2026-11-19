@@ -4,6 +4,7 @@ import { Pressable, RefreshControl, ScrollView, View } from 'react-native';
 
 import { Avatar } from '@/components/avatar';
 import { StatusChip } from '@/components/status-chip';
+import { TonightRow } from '@/components/tonight-row';
 import { UserRow } from '@/components/user-row';
 import { Button, Chip, Empty, Loading, Screen, Text } from '@/components/ui';
 import { Fonts, Palette, Spacing } from '@/constants/theme';
@@ -40,6 +41,8 @@ export default function Home() {
           </Pressable>
         </Link>
       </View>
+
+      <TonightRow />
 
       <Pressable onPress={() => router.push('/set-status' as Href)}>
         <View

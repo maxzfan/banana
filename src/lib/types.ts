@@ -67,3 +67,48 @@ export type Notification = {
   read_at: string | null;
   created_at: string;
 };
+
+export type TonightAudience = 'friends' | 'ripe' | 'bunch';
+
+export type TonightPost = {
+  post_id: string;
+  user_id: string;
+  name: string;
+  username: string;
+  photo_url: string | null;
+  note: string | null;
+  audience: TonightAudience | null;
+  expires_at: string;
+  joined: boolean;
+  join_count: number;
+  chat_id: string | null;
+};
+
+export type SetupPrompt = {
+  setup_id: string;
+  matchmaker_id: string | null;
+  matchmaker_name: string | null;
+  matchmaker_photo_url: string | null;
+  other_id: string;
+  other_name: string;
+  other_username: string;
+  other_photo_url: string | null;
+  other_bio: string | null;
+  note: string | null;
+  my_decision: 'pending' | 'accept' | 'pass';
+  matched: boolean;
+  chat_id: string | null;
+  created_at: string;
+};
+
+export type ChatSummary = {
+  chat_id: string;
+  kind: 'setup' | 'tonight';
+  title: string | null;
+  members: { id: string; name: string; photo_url: string | null }[];
+  last_body: string | null;
+  last_at: string;
+  unread: number;
+};
+
+export type Message = { id: string; chat_id: string; sender_id: string | null; body: string; created_at: string };
