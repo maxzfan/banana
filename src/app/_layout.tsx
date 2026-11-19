@@ -44,9 +44,6 @@ function RootStack() {
         if (error) notify('Invite problem', error.message);
         else setTimeout(() => router.replace(`/survey/${data}` as Href), 0);
       });
-    } else if (onboardingFlags.showStatusPicker) {
-      onboardingFlags.showStatusPicker = false;
-      setTimeout(() => router.push('/set-status?first=1' as Href), 0);
     }
   }, [signedIn, onboarded]);
 
@@ -72,6 +69,7 @@ function RootStack() {
           <Stack.Screen name="settings" />
           <Stack.Screen name="survey/[id]" />
         </Stack.Protected>
+        <Stack.Screen name="index" />
         <Stack.Screen name="i/[token]" />
       </Stack>
     </ThemeProvider>

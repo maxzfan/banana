@@ -58,7 +58,11 @@ export default function Home() {
         </View>
       </Pressable>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: Spacing.two }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ flexGrow: 0 }}
+        contentContainerStyle={{ gap: Spacing.two, alignItems: 'center' }}>
         {FILTERS.map((f) => (
           <Chip
             key={f}
@@ -75,7 +79,7 @@ export default function Home() {
         <Loading />
       ) : (data ?? []).length === 0 ? (
         <Empty
-          title="Your bunch is empty"
+          title="No friends yet"
           body="Add friends to see their statuses here."
           action={<Button title="Find friends" small onPress={() => router.push('/friends' as Href)} />}
         />

@@ -10,3 +10,10 @@ export const pendingInvite = {
 };
 
 export const onboardingFlags = { showStatusPicker: false };
+
+// New (non-invited) users see the status picker once, right after onboarding.
+export function takeStatusPickerFlag() {
+  const show = onboardingFlags.showStatusPicker;
+  onboardingFlags.showStatusPicker = false;
+  return show;
+}
