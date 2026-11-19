@@ -80,6 +80,7 @@ create table public.validator_invites (
   state public.invite_state not null default 'pending',
   created_at timestamptz not null default now(),
   claimed_at timestamptz,
+  revoked_at timestamptz,
   check (validator_id is null or validator_id <> owner_id)
 );
 create unique index validator_invites_one_per_validator_idx on public.validator_invites (verification_id, validator_id) where validator_id is not null;
@@ -248,10 +249,48 @@ end;
 $$;
 
 -- Owner removes a validator (only before they answer).
-create function public.revoke_validator_invite(invite uuid) returns void
-language sql security definer set search_path = '' as $$
-  update public.validator_invites set state = 'revoked'
+create function public.revoke_validator_invite(invite uuid) returns boolean
+language plpgsql security definer set search_path = '' as $$
+begin
+  update public.validator_invites set state = 'revoked', revoked_at = now()
   where id = invite and owner_id = auth.uid() and state in ('pending', 'claimed');
+  return found;
+end;
+$$;
+
+-- Add existing friends straight to the Bunch; they get an in-app request (a share link still works too).
+create function public.add_friend_validators(friend_ids uuid[])
+returns setof public.validator_invites
+language plpgsql security definer set search_path = '' as $$
+declare
+  me uuid := auth.uid();
+  my_status public.banana_status;
+  v_id uuid;
+begin
+  if me is null then raise exception 'not authenticated'; end if;
+  select status into my_status from public.statuses where user_id = me;
+  if my_status = 'peel_sealed' then raise exception 'Peel Sealed statuses cannot be verified'; end if;
+  if exists (select 1 from unnest(friend_ids) f where not public.are_friends(me, f)) then
+    raise exception 'validators must be your friends';
+  end if;
+  select id into v_id from public.verifications where user_id = me and state <> 'expired';
+  if v_id is null then
+    insert into public.verifications (user_id, status) values (me, my_status) returning id into v_id;
+  end if;
+  return query
+    with added as (
+      insert into public.validator_invites (verification_id, owner_id, label, validator_id, state, claimed_at)
+      select v_id, me, coalesce(p.name, p.username::text, 'Friend'), p.id, 'claimed', now()
+      from public.profiles p
+      where p.id = any (friend_ids)
+        and not exists (select 1 from public.validator_invites i where i.verification_id = v_id and i.validator_id = p.id and i.state <> 'revoked')
+      returning *
+    ), notified as (
+      insert into public.notifications (user_id, kind, actor_id, payload)
+      select a.validator_id, 'validator_request', me, jsonb_build_object('invite_id', a.id) from added a
+    )
+    select * from added;
+end;
 $$;
 
 -- Public preview for the invite landing page (works signed out).
@@ -477,7 +516,7 @@ grant insert (reporter_id, target_id, reason, details) on public.reports to auth
 grant update (read_at) on public.notifications to authenticated;
 -- validator_invites.state is hidden from owners so they can't infer who answered.
 revoke select on public.validator_invites from authenticated;
-grant select (id, verification_id, owner_id, label, token, validator_id, created_at, claimed_at) on public.validator_invites to authenticated;
+grant select (id, verification_id, owner_id, label, token, validator_id, created_at, claimed_at, revoked_at) on public.validator_invites to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on all functions in schema public to authenticated;

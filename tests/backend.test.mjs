@@ -127,6 +127,14 @@ test('core loop', async () => {
   assert.equal(ok(await dee.c.from('friendships').select()).length, 0);
   assert.equal(ok(await max.c.rpc('search_users', { q: 'dee' })).length, 0);
 
+  // Friends can be added directly; revoke hides them
+  const direct = ok(await max.c.rpc('add_friend_validators', { friend_ids: [ann.id] }));
+  assert.equal(direct.length, 0, 'already in the Bunch');
+  assert.ok((await max.c.rpc('add_friend_validators', { friend_ids: [dee.id] })).error, 'must be friends');
+  const annCurrent = ok(await max.c.from('validator_invites').select('id, validator_id, revoked_at').eq('validator_id', ann.id).eq('verification_id', summary.verification_id).is('revoked_at', null));
+  assert.equal(annCurrent.length, 1);
+  assert.equal(ok(await max.c.rpc('revoke_validator_invite', { invite: annCurrent[0].id })), true);
+
   // Report
   ok(await ann.c.from('reports').insert({ reporter_id: ann.id, target_id: bo.id, reason: 'spam' }));
 
