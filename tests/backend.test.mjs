@@ -145,7 +145,10 @@ test('core loop', async () => {
   assert.equal(annCurrent.length, 1);
   assert.equal(ok(await max.c.rpc('revoke_validator_invite', { invite: annCurrent[0].id })), true, 'answered invites can be removed too');
   assert.equal(ok(await max.c.rpc('my_verification_summary'))[0].confirmations, 1, 'removing reveals nothing about the answer');
-  assert.equal(ok(await max.c.rpc('add_friend_validators', { friend_ids: [ann.id] })).length, 1, 'removed validator can be re-added');
+  const readded = ok(await max.c.rpc('add_friend_validators', { friend_ids: [ann.id] }));
+  assert.equal(readded.length, 1, 'removed validator can be re-added');
+  ok(await ann.c.rpc('submit_survey', { invite: readded[0].id, answer: 'yes' }));
+  assert.equal(ok(await max.c.rpc('my_verification_summary'))[0].confirmations, 1, 'one validator counts once');
 
   // Report
   ok(await ann.c.from('reports').insert({ reporter_id: ann.id, target_id: bo.id, reason: 'spam' }));

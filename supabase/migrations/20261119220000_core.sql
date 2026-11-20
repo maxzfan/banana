@@ -368,7 +368,7 @@ begin
     values (inv.id, answer, nullif(trim(fun_question), ''), nullif(trim(fun_answer), ''));
   update public.validator_invites set state = 'answered' where id = inv.id;
 
-  select count(*) into yes_count
+  select count(distinct i.validator_id) into yes_count
   from public.validator_responses r join public.validator_invites i on i.id = r.invite_id
   where i.verification_id = v.id and r.answer = 'yes';
 
@@ -385,7 +385,7 @@ create function public.my_verification_summary()
 returns table (verification_id uuid, status public.banana_status, state public.verification_state, confirmations integer, needed integer, certified_at timestamptz)
 language sql stable security definer set search_path = '' as $$
   select v.id, v.status, v.state,
-    (select count(*)::int from public.validator_responses r join public.validator_invites i on i.id = r.invite_id
+    (select count(distinct i.validator_id)::int from public.validator_responses r join public.validator_invites i on i.id = r.invite_id
       where i.verification_id = v.id and r.answer = 'yes'),
     3, v.certified_at
   from public.verifications v
