@@ -20,8 +20,8 @@ export default function Chat() {
 
   const { data: chat } = useAsync(async () => {
     const chats = await unwrap<ChatSummary[]>(supabase.rpc('my_chats'));
-    const msgs = await unwrap<Message[]>(supabase.from('messages').select('*').eq('chat_id', id).order('created_at').limit(500));
-    setMessages(msgs);
+    const msgs = await unwrap<Message[]>(supabase.from('messages').select('*').eq('chat_id', id).order('created_at', { ascending: false }).limit(500));
+    setMessages(msgs.reverse());
     supabase.rpc('mark_chat_read', { chat: id }).then();
     return chats.find((c) => c.chat_id === id) ?? null;
   }, [id]);

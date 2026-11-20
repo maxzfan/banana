@@ -43,7 +43,7 @@ export default function SetStatus() {
     setSaving(false);
     if (error) return setError(error.message);
     await refresh();
-    if (first && status !== 'peel_sealed') router.replace('/bunch' as Href);
+    if (first) router.replace((status === 'peel_sealed' ? '/home' : '/bunch') as Href);
     else router.back();
   }
 
