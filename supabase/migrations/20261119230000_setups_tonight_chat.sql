@@ -284,6 +284,11 @@ begin
     raise exception 'this plan is no longer available';
   end if;
   if t.user_id = me then raise exception 'this is your own plan'; end if;
+  -- Lock the friendship so a concurrent unfriend/block waits for this join and then removes it.
+  perform 1 from public.friendships f
+  where f.state = 'accepted' and ((f.requester_id = t.user_id and f.addressee_id = me) or (f.requester_id = me and f.addressee_id = t.user_id))
+  for share;
+  if not found then raise exception 'this plan is no longer available'; end if;
   if t.chat_id is null then
     select name into owner_name from public.profiles where id = t.user_id;
     insert into public.chats (kind, title, host_id) values ('tonight', owner_name || '''s night out', t.user_id) returning id into t.chat_id;
