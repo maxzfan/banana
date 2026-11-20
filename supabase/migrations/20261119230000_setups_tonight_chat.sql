@@ -182,6 +182,15 @@ begin
     update public.setups set b_decision = decision where id = setup returning * into s;
   end if;
   if s.a_decision = 'accept' and s.b_decision = 'accept' and not private.is_blocked_between(s.person_a, s.person_b) then
+    -- Already matched through another suggestion: reuse that chat.
+    select o.chat_id into new_chat from public.setups o
+    where o.id <> s.id and o.matched_at is not null
+      and least(o.person_a, o.person_b) = least(s.person_a, s.person_b) and greatest(o.person_a, o.person_b) = greatest(s.person_a, s.person_b)
+    limit 1;
+    if found then
+      update public.setups set matched_at = now(), chat_id = new_chat where id = setup;
+      return true;
+    end if;
     insert into public.chats (kind) values ('setup') returning id into new_chat;
     insert into public.chat_members (chat_id, user_id) values (new_chat, s.person_a), (new_chat, s.person_b);
     update public.setups set matched_at = now(), chat_id = new_chat where id = setup;
@@ -219,6 +228,7 @@ language plpgsql security definer set search_path = '' as $$
 declare
   me uuid := auth.uid();
   new_id uuid;
+  plan_chat uuid;
 begin
   if me is null then raise exception 'not authenticated'; end if;
   if expires_at <= now() or expires_at > now() + interval '28 hours' then
@@ -226,8 +236,13 @@ begin
   end if;
   -- Editing an active plan keeps its RSVPs and group chat; an expired one starts fresh.
   update public.tonight_posts t set note = nullif(trim(set_tonight.note), ''), audience = set_tonight.audience, expires_at = set_tonight.expires_at
-  where t.user_id = me and t.expires_at > now() returning t.id into new_id;
-  if new_id is null then
+  where t.user_id = me and t.expires_at > now() returning t.id, t.chat_id into new_id, plan_chat;
+  if new_id is not null then
+    -- A narrower audience drops guests who no longer qualify.
+    delete from public.tonight_joins j where j.post_id = new_id and not private.can_see_tonight(me, set_tonight.audience, j.user_id);
+    delete from public.chat_members cm where cm.chat_id = plan_chat and cm.user_id <> me
+      and not private.can_see_tonight(me, set_tonight.audience, cm.user_id);
+  else
     delete from public.tonight_posts where user_id = me;
     insert into public.tonight_posts (user_id, note, audience, expires_at)
     values (me, nullif(trim(note), ''), audience, expires_at) returning id into new_id;

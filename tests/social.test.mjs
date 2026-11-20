@@ -80,14 +80,18 @@ test('banana split, going bananas, chat', async () => {
   assert.equal(mm[0].matched, false);
   assert.ok(!('a_decision' in mm[0]));
 
-  // Mutual accept opens a chat and credits the matchmaker. (Max suggests this time.)
+  // Mutual accept opens a chat and credits the matchmaker. (Max suggests this time; Dee in parallel.)
   const s2 = ok(await max.c.rpc('suggest_setup', { a: ann.id, b: bob.id }));
+  const s3 = ok(await dee.c.rpc('suggest_setup', { a: ann.id, b: bob.id }));
   assert.equal(ok(await ann.c.rpc('respond_setup', { setup: s2, decision: 'accept' })), false);
   assert.equal(ok(await bob.c.rpc('respond_setup', { setup: s2, decision: 'accept' })), true);
-  const annP = ok(await ann.c.rpc('my_setup_prompts'));
-  assert.equal(annP[0].matched, true);
-  assert.ok(annP[0].chat_id);
-  const chatId = annP[0].chat_id;
+  const annP = ok(await ann.c.rpc('my_setup_prompts')).find((p) => p.setup_id === s2);
+  assert.equal(annP.matched, true);
+  assert.ok(annP.chat_id);
+  const chatId = annP.chat_id;
+  ok(await ann.c.rpc('respond_setup', { setup: s3, decision: 'accept' }));
+  assert.equal(ok(await bob.c.rpc('respond_setup', { setup: s3, decision: 'accept' })), true);
+  assert.equal(ok(await bob.c.rpc('my_chats')).filter((c) => c.kind === 'setup').length, 1, 'second suggestion reuses the chat');
   const maxProfile = ok(await max.c.from('profiles').select('setups_made').eq('id', max.id).single());
   assert.equal(maxProfile.setups_made, 1);
   const maxNotes = ok(await max.c.from('notifications').select('kind').eq('kind', 'setup_success'));
@@ -134,6 +138,13 @@ test('banana split, going bananas, chat', async () => {
   assert.equal(edited.note, 'drinks at 9');
   assert.equal(edited.join_count, 2);
   assert.equal(edited.chat_id, tChat);
+
+  // Narrowing to Ripe friends drops Cyd (not Ripe) from the plan and its chat; Ann stays.
+  ok(await max.c.rpc('set_tonight', { note: 'drinks at 9', audience: 'ripe', expires_at: tomorrow4am }));
+  const narrowed = ok(await max.c.from('chat_members').select('user_id').eq('chat_id', tChat)).map((m) => m.user_id).sort();
+  assert.deepEqual(narrowed, [max.id, ann.id].sort());
+  ok(await max.c.rpc('set_tonight', { note: 'drinks at 9', audience: 'friends', expires_at: tomorrow4am }));
+  ok(await cyd.c.rpc('join_tonight', { post: post2 }));
 
   // Bunch-only: Cyd is in Ann's Bunch, Bob is not.
   ok(await ann.c.rpc('set_tonight', { note: null, audience: 'bunch', expires_at: tomorrow4am }));
