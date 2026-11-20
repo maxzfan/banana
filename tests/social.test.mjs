@@ -66,6 +66,7 @@ test('banana split, going bananas, chat', async () => {
   assert.ok((await cyd.c.rpc('suggest_setup', { a: ann.id, b: bob.id })).error, 'no duplicate open set-up');
   assert.ok((await ann.c.from('setups').select('*')).error, 'setups table hidden');
   ok(await ann.c.rpc('respond_setup', { setup: s1, decision: 'pass' }));
+  assert.ok((await cyd.c.rpc('suggest_setup', { a: ann.id, b: bob.id })).error, 'retry after a pass is rejected the same way');
   assert.equal(ok(await ann.c.rpc('my_setup_prompts')).length, 0);
   const bobPrompts = ok(await bob.c.rpc('my_setup_prompts'));
   assert.equal(bobPrompts.length, 1);
@@ -124,6 +125,15 @@ test('banana split, going bananas, chat', async () => {
   assert.equal(feedForCyd.joined, true);
   assert.equal(feedForCyd.join_count, 2);
   assert.equal(feedForCyd.audience, null, 'audience hidden from viewers');
+  assert.ok((await cyd.c.from('tonight_posts').select('audience')).error, 'audience column not readable');
+  assert.equal(ok(await cyd.c.from('tonight_posts').select('id')).some((p) => p.id === post2), true);
+
+  // Editing the plan keeps RSVPs and the group chat.
+  assert.equal(ok(await max.c.rpc('set_tonight', { note: 'drinks at 9', audience: 'friends', expires_at: tomorrow4am })), post2);
+  const edited = ok(await cyd.c.rpc('tonight_feed')).find((p) => p.post_id === post2);
+  assert.equal(edited.note, 'drinks at 9');
+  assert.equal(edited.join_count, 2);
+  assert.equal(edited.chat_id, tChat);
 
   // Bunch-only: Cyd is in Ann's Bunch, Bob is not.
   ok(await ann.c.rpc('set_tonight', { note: null, audience: 'bunch', expires_at: tomorrow4am }));
@@ -139,4 +149,16 @@ test('banana split, going bananas, chat', async () => {
   // Blocking closes the set-up chat.
   ok(await ann.c.from('blocks').insert({ blocker_id: ann.id, blocked_id: bob.id }));
   assert.equal(ok(await bob.c.rpc('my_chats')).some((c) => c.chat_id === chatId), false);
+
+  // Blocking the host removes you from their Tonight chat.
+  ok(await cyd.c.from('blocks').insert({ blocker_id: cyd.id, blocked_id: max.id }));
+  assert.equal(ok(await cyd.c.from('messages').select('id').eq('chat_id', tChat)).length, 0);
+  assert.ok((await cyd.c.from('messages').insert({ chat_id: tChat, sender_id: cyd.id, body: 'still here?' })).error);
+
+  // Deleting an account deletes its messages and lets it clean up its avatar.
+  ok(await ann.c.from('messages').insert({ chat_id: tChat, sender_id: ann.id, body: 'bye' }));
+  ok(await ann.c.storage.from('avatars').upload(`${ann.id}/a.png`, new Blob(['x'], { type: 'image/png' })));
+  assert.equal(ok(await ann.c.storage.from('avatars').list(ann.id)).length, 1);
+  ok(await ann.c.rpc('delete_account'));
+  assert.equal(ok(await max.c.from('messages').select('body').eq('chat_id', tChat)).some((m) => m.body === 'bye'), false);
 });

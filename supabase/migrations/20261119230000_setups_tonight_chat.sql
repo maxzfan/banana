@@ -8,6 +8,7 @@ create table public.chats (
   id uuid primary key default gen_random_uuid(),
   kind public.chat_kind not null,
   title text,
+  host_id uuid references public.profiles (id) on delete set null,
   created_at timestamptz not null default now()
 );
 
@@ -23,7 +24,7 @@ create index chat_members_user_idx on public.chat_members (user_id);
 create table public.messages (
   id uuid primary key default gen_random_uuid(),
   chat_id uuid not null references public.chats (id) on delete cascade,
-  sender_id uuid references public.profiles (id) on delete set null,
+  sender_id uuid references public.profiles (id) on delete cascade,
   body text not null check (char_length(body) between 1 and 2000),
   created_at timestamptz not null default now()
 );
@@ -43,8 +44,8 @@ create table public.setups (
   matched_at timestamptz,
   check (person_a <> person_b)
 );
-create unique index setups_open_pair_idx on public.setups (least(person_a, person_b), greatest(person_a, person_b))
-  where matched_at is null and a_decision <> 'pass' and b_decision <> 'pass';
+-- One suggestion per matchmaker per pair, ever, so a retry can't reveal whether someone passed.
+create unique index setups_matchmaker_pair_idx on public.setups (matchmaker_id, least(person_a, person_b), greatest(person_a, person_b));
 
 create table public.tonight_posts (
   id uuid primary key default gen_random_uuid(),
@@ -65,13 +66,13 @@ create table public.tonight_joins (
 
 -- Helpers ------------------------------------------------------------------
 
-create function public.is_chat_member(chat uuid, member uuid) returns boolean
+create function private.is_chat_member(chat uuid, member uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (select 1 from public.chat_members where chat_id = chat and user_id = member);
 $$;
 
 -- Certified Ripe with set-ups switched on.
-create function public.is_matchable(person uuid) returns boolean
+create function private.is_matchable(person uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.statuses s join public.profiles p on p.id = s.user_id
@@ -79,13 +80,13 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
-create function public.can_see_tonight(post_owner uuid, aud public.tonight_audience, viewer uuid) returns boolean
+create function private.can_see_tonight(post_owner uuid, aud public.tonight_audience, viewer uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select post_owner = viewer or (
-    public.are_friends(post_owner, viewer) and case aud
+    private.are_friends(post_owner, viewer) and case aud
       when 'friends' then true
       when 'ripe' then exists (select 1 from public.statuses where user_id = viewer and status = 'ripe')
-      when 'bunch' then public.in_bunch(post_owner, viewer)
+      when 'bunch' then private.in_bunch(post_owner, viewer)
     end
   );
 $$;
@@ -100,7 +101,7 @@ language sql stable security definer set search_path = '' as $$
   join public.profiles p on p.id = case when f.requester_id = auth.uid() then f.addressee_id else f.requester_id end
   join public.statuses s on s.user_id = p.id
   where f.state = 'accepted' and auth.uid() in (f.requester_id, f.addressee_id)
-    and public.is_matchable(p.id) and public.can_see_status(p.id, auth.uid())
+    and private.is_matchable(p.id) and private.can_see_status(p.id, auth.uid())
   order by p.name;
 $$;
 
@@ -112,20 +113,20 @@ declare
 begin
   if me is null then raise exception 'not authenticated'; end if;
   if a = b or me in (a, b) then raise exception 'pick two other people'; end if;
-  if not (public.are_friends(me, a) and public.are_friends(me, b)) then
+  if not (private.are_friends(me, a) and private.are_friends(me, b)) then
     raise exception 'you can only set up your friends';
   end if;
-  if not (public.is_matchable(a) and public.is_matchable(b)
-          and public.can_see_status(a, me) and public.can_see_status(b, me)) then
+  if not (private.is_matchable(a) and private.is_matchable(b)
+          and private.can_see_status(a, me) and private.can_see_status(b, me)) then
     raise exception 'both people must be Certified Ripe with set-ups on';
   end if;
-  if public.is_blocked_between(a, b) then raise exception 'this set-up is not possible'; end if;
+  if private.is_blocked_between(a, b) then raise exception 'this set-up is not possible'; end if;
   if exists (
     select 1 from public.setups
     where least(person_a, person_b) = least(a, b) and greatest(person_a, person_b) = greatest(a, b)
-      and (matched_at is not null or (a_decision <> 'pass' and b_decision <> 'pass'))
+      and (matchmaker_id = me or matched_at is not null)
   ) then
-    raise exception 'these two already have a set-up';
+    raise exception 'you already suggested these two, or they are already matched';
   end if;
   insert into public.setups (matchmaker_id, person_a, person_b, note)
   values (me, a, b, nullif(trim(note), '')) returning id into new_id;
@@ -153,7 +154,7 @@ language sql stable security definer set search_path = '' as $$
   join public.profiles o on o.id = case when s.person_a = auth.uid() then s.person_b else s.person_a end
   left join public.profiles m on m.id = s.matchmaker_id
   where auth.uid() in (s.person_a, s.person_b)
-    and not public.is_blocked_between(s.person_a, s.person_b)
+    and not private.is_blocked_between(s.person_a, s.person_b)
     and (s.matched_at is not null or (case when s.person_a = auth.uid() then s.a_decision else s.b_decision end) = 'pending')
   order by s.created_at desc;
 $$;
@@ -172,7 +173,7 @@ begin
   if (me = s.person_a and s.a_decision <> 'pending') or (me = s.person_b and s.b_decision <> 'pending') then
     raise exception 'you already answered';
   end if;
-  if decision = 'accept' and not public.is_matchable(me) then
+  if decision = 'accept' and not private.is_matchable(me) then
     raise exception 'you need to be Certified Ripe with set-ups on';
   end if;
   if me = s.person_a then
@@ -180,7 +181,7 @@ begin
   else
     update public.setups set b_decision = decision where id = setup returning * into s;
   end if;
-  if s.a_decision = 'accept' and s.b_decision = 'accept' and not public.is_blocked_between(s.person_a, s.person_b) then
+  if s.a_decision = 'accept' and s.b_decision = 'accept' and not private.is_blocked_between(s.person_a, s.person_b) then
     insert into public.chats (kind) values ('setup') returning id into new_chat;
     insert into public.chat_members (chat_id, user_id) values (new_chat, s.person_a), (new_chat, s.person_b);
     update public.setups set matched_at = now(), chat_id = new_chat where id = setup;
@@ -223,9 +224,14 @@ begin
   if expires_at <= now() or expires_at > now() + interval '28 hours' then
     raise exception 'tonight must end within the next day';
   end if;
-  delete from public.tonight_posts where user_id = me;
-  insert into public.tonight_posts (user_id, note, audience, expires_at)
-  values (me, nullif(trim(note), ''), audience, expires_at) returning id into new_id;
+  -- Editing an active plan keeps its RSVPs and group chat; an expired one starts fresh.
+  update public.tonight_posts t set note = nullif(trim(set_tonight.note), ''), audience = set_tonight.audience, expires_at = set_tonight.expires_at
+  where t.user_id = me and t.expires_at > now() returning t.id into new_id;
+  if new_id is null then
+    delete from public.tonight_posts where user_id = me;
+    insert into public.tonight_posts (user_id, note, audience, expires_at)
+    values (me, nullif(trim(note), ''), audience, expires_at) returning id into new_id;
+  end if;
   return new_id;
 end;
 $$;
@@ -244,10 +250,10 @@ language sql stable security definer set search_path = '' as $$
          t.expires_at,
          exists (select 1 from public.tonight_joins j where j.post_id = t.id and j.user_id = auth.uid()),
          (select count(*)::int from public.tonight_joins j where j.post_id = t.id),
-         case when public.is_chat_member(t.chat_id, auth.uid()) then t.chat_id end
+         case when private.is_chat_member(t.chat_id, auth.uid()) then t.chat_id end
   from public.tonight_posts t
   join public.profiles p on p.id = t.user_id
-  where t.expires_at > now() and public.can_see_tonight(t.user_id, t.audience, auth.uid())
+  where t.expires_at > now() and private.can_see_tonight(t.user_id, t.audience, auth.uid())
   order by (t.user_id = auth.uid()) desc, t.created_at desc;
 $$;
 
@@ -259,13 +265,13 @@ declare
   owner_name text;
 begin
   select * into t from public.tonight_posts where id = post for update;
-  if t.id is null or t.expires_at <= now() or not public.can_see_tonight(t.user_id, t.audience, me) then
+  if t.id is null or t.expires_at <= now() or not private.can_see_tonight(t.user_id, t.audience, me) then
     raise exception 'this plan is no longer available';
   end if;
   if t.user_id = me then raise exception 'this is your own plan'; end if;
   if t.chat_id is null then
     select name into owner_name from public.profiles where id = t.user_id;
-    insert into public.chats (kind, title) values ('tonight', owner_name || '''s night out') returning id into t.chat_id;
+    insert into public.chats (kind, title, host_id) values ('tonight', owner_name || '''s night out', t.user_id) returning id into t.chat_id;
     update public.tonight_posts set chat_id = t.chat_id where id = post;
     insert into public.chat_members (chat_id, user_id) values (t.chat_id, t.user_id);
   end if;
@@ -309,13 +315,16 @@ language sql security definer set search_path = '' as $$
   delete from public.chat_members where chat_id = chat and user_id = auth.uid();
 $$;
 
--- Blocking also closes any one-to-one set-up chat between the two people.
+-- Blocking closes any set-up chat between the two people and removes them from each other's Tonight chats.
 create function public.handle_block_chats() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   delete from public.chats c
   where c.kind = 'setup'
-    and public.is_chat_member(c.id, new.blocker_id) and public.is_chat_member(c.id, new.blocked_id);
+    and private.is_chat_member(c.id, new.blocker_id) and private.is_chat_member(c.id, new.blocked_id);
+  delete from public.chat_members cm using public.chats c
+  where cm.chat_id = c.id and c.kind = 'tonight'
+    and ((c.host_id = new.blocker_id and cm.user_id = new.blocked_id) or (c.host_id = new.blocked_id and cm.user_id = new.blocker_id));
   delete from public.tonight_joins j using public.tonight_posts t
   where j.post_id = t.id and ((t.user_id = new.blocker_id and j.user_id = new.blocked_id)
                            or (t.user_id = new.blocked_id and j.user_id = new.blocker_id));
@@ -335,26 +344,30 @@ alter table public.tonight_posts enable row level security;
 alter table public.tonight_joins enable row level security;
 
 create policy "members see chat" on public.chats for select to authenticated
-  using (public.is_chat_member(id, auth.uid()));
+  using (private.is_chat_member(id, auth.uid()));
 create policy "members see members" on public.chat_members for select to authenticated
-  using (public.is_chat_member(chat_id, auth.uid()));
+  using (private.is_chat_member(chat_id, auth.uid()));
 create policy "members read messages" on public.messages for select to authenticated
-  using (public.is_chat_member(chat_id, auth.uid()));
+  using (private.is_chat_member(chat_id, auth.uid()));
 create policy "members send messages" on public.messages for insert to authenticated
-  with check (sender_id = auth.uid() and public.is_chat_member(chat_id, auth.uid()));
+  with check (sender_id = auth.uid() and private.is_chat_member(chat_id, auth.uid()));
 -- setups: no client policies; access only through RPCs above.
 create policy "tonight visible to chosen audience" on public.tonight_posts for select to authenticated
-  using (expires_at > now() and public.can_see_tonight(user_id, audience, auth.uid()));
+  using (expires_at > now() and private.can_see_tonight(user_id, audience, auth.uid()));
 create policy "see joins on visible posts" on public.tonight_joins for select to authenticated
   using (exists (select 1 from public.tonight_posts t where t.id = post_id));
 
 revoke all on public.chats, public.chat_members, public.messages, public.setups, public.tonight_posts, public.tonight_joins from anon, authenticated;
-grant select on public.chats, public.chat_members, public.messages, public.tonight_posts, public.tonight_joins to authenticated;
+grant select on public.chats, public.chat_members, public.messages, public.tonight_joins to authenticated;
+-- audience is only shown to the host, via tonight_feed().
+grant select (id, user_id, note, expires_at, chat_id, created_at) on public.tonight_posts to authenticated;
 grant insert (chat_id, sender_id, body) on public.messages to authenticated;
 
 revoke execute on all functions in schema public from public, anon;
 grant execute on all functions in schema public to authenticated;
 grant execute on function public.get_invite_preview(text) to anon;
+revoke execute on all functions in schema private from public, anon;
+grant execute on all functions in schema private to authenticated;
 revoke execute on function public.handle_new_user(), public.handle_block(), public.handle_friendship_change(),
   public.handle_status_change(), public.handle_block_chats() from authenticated;
 

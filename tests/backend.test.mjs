@@ -39,6 +39,9 @@ test('core loop', async () => {
 
   // Search by username and phone
   assert.equal(ok(await max.c.rpc('search_users', { q: 'an' }))[0].id, ann.id);
+  assert.equal(ok(await max.c.rpc('search_users', { q: '@ann' }))[0].id, ann.id);
+  assert.ok((await max.c.rpc('are_friends', { a: ann.id, b: bo.id })).error, 'relationship helpers are not exposed');
+  assert.ok((await max.c.rpc('is_matchable', { person: ann.id })).error, 'relationship helpers are not exposed');
   assert.equal(ok(await max.c.rpc('search_users', { q: '(555) 000-0002' }))[0].id, ann.id);
   assert.equal(ok(await max.c.rpc('match_contacts', { phones: ['15550000003', '19999999999'] }))[0].id, bo.id);
 
@@ -93,6 +96,9 @@ test('core loop', async () => {
   assert.equal(summary.confirmations, 2);
   assert.equal(summary.state, 'collecting');
 
+  // Answering doesn't change what the owner can see about the link
+  assert.equal(ok(await max.c.rpc('get_invite_preview', { invite_token: iAnn.token }))[0].valid, true);
+
   // Owner can never read individual answers or answer state
   assert.equal(ok(await max.c.from('validator_responses').select()).length, 0);
   assert.ok((await max.c.from('validator_invites').select('state')).error);
@@ -131,9 +137,15 @@ test('core loop', async () => {
   const direct = ok(await max.c.rpc('add_friend_validators', { friend_ids: [ann.id] }));
   assert.equal(direct.length, 0, 'already in the Bunch');
   assert.ok((await max.c.rpc('add_friend_validators', { friend_ids: [dee.id] })).error, 'must be friends');
+  const deeCurrent = ok(await max.c.from('validator_invites').select('id').eq('validator_id', dee.id).eq('verification_id', summary.verification_id).is('revoked_at', null));
+  assert.equal(deeCurrent.length, 0, 'block removes the validator from the Bunch list');
+  ok(await ann.c.rpc('submit_survey', { invite: reconfirm[0].payload.invite_id, answer: 'yes' }));
+  assert.equal(ok(await max.c.rpc('my_verification_summary'))[0].confirmations, 1);
   const annCurrent = ok(await max.c.from('validator_invites').select('id, validator_id, revoked_at').eq('validator_id', ann.id).eq('verification_id', summary.verification_id).is('revoked_at', null));
   assert.equal(annCurrent.length, 1);
-  assert.equal(ok(await max.c.rpc('revoke_validator_invite', { invite: annCurrent[0].id })), true);
+  assert.equal(ok(await max.c.rpc('revoke_validator_invite', { invite: annCurrent[0].id })), true, 'answered invites can be removed too');
+  assert.equal(ok(await max.c.rpc('my_verification_summary'))[0].confirmations, 1, 'removing reveals nothing about the answer');
+  assert.equal(ok(await max.c.rpc('add_friend_validators', { friend_ids: [ann.id] })).length, 1, 'removed validator can be re-added');
 
   // Report
   ok(await ann.c.from('reports').insert({ reporter_id: ann.id, target_id: bo.id, reason: 'spam' }));

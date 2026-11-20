@@ -83,7 +83,7 @@ create table public.validator_invites (
   revoked_at timestamptz,
   check (validator_id is null or validator_id <> owner_id)
 );
-create unique index validator_invites_one_per_validator_idx on public.validator_invites (verification_id, validator_id) where validator_id is not null;
+create unique index validator_invites_one_per_validator_idx on public.validator_invites (verification_id, validator_id) where validator_id is not null and state <> 'revoked';
 
 create table public.validator_responses (
   invite_id uuid primary key references public.validator_invites (id) on delete cascade,
@@ -105,8 +105,10 @@ create table public.notifications (
 create index notifications_user_idx on public.notifications (user_id, created_at desc);
 
 -- Helpers -----------------------------------------------------------------
+-- Kept out of the API schema so clients cannot probe other people's relationships via RPC.
+create schema private;
 
-create function public.is_blocked_between(a uuid, b uuid) returns boolean
+create function private.is_blocked_between(a uuid, b uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.blocks
@@ -114,7 +116,7 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
-create function public.are_friends(a uuid, b uuid) returns boolean
+create function private.are_friends(a uuid, b uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.friendships
@@ -123,7 +125,7 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
-create function public.in_bunch(owner uuid, viewer uuid) returns boolean
+create function private.in_bunch(owner uuid, viewer uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.validator_invites i
@@ -133,14 +135,14 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
-create function public.can_see_status(owner uuid, viewer uuid) returns boolean
+create function private.can_see_status(owner uuid, viewer uuid) returns boolean
 language sql stable security definer set search_path = '' as $$
   select owner = viewer or (
-    not public.is_blocked_between(owner, viewer) and exists (
+    not private.is_blocked_between(owner, viewer) and exists (
       select 1 from public.statuses s
       where s.user_id = owner and (
-        (s.visibility = 'friends' and public.are_friends(owner, viewer))
-        or (s.visibility = 'bunch' and public.in_bunch(owner, viewer))
+        (s.visibility = 'friends' and private.are_friends(owner, viewer))
+        or (s.visibility = 'bunch' and private.in_bunch(owner, viewer))
       )
     )
   );
@@ -165,7 +167,7 @@ begin
   delete from public.friendships
   where (requester_id = new.blocker_id and addressee_id = new.blocked_id)
      or (requester_id = new.blocked_id and addressee_id = new.blocker_id);
-  update public.validator_invites set state = 'revoked'
+  update public.validator_invites set state = 'revoked', revoked_at = coalesce(revoked_at, now())
   where (owner_id = new.blocker_id and validator_id = new.blocked_id)
      or (owner_id = new.blocked_id and validator_id = new.blocker_id);
   return new;
@@ -253,7 +255,7 @@ create function public.revoke_validator_invite(invite uuid) returns boolean
 language plpgsql security definer set search_path = '' as $$
 begin
   update public.validator_invites set state = 'revoked', revoked_at = now()
-  where id = invite and owner_id = auth.uid() and state in ('pending', 'claimed');
+  where id = invite and owner_id = auth.uid() and state <> 'revoked';
   return found;
 end;
 $$;
@@ -270,7 +272,7 @@ begin
   if me is null then raise exception 'not authenticated'; end if;
   select status into my_status from public.statuses where user_id = me;
   if my_status = 'peel_sealed' then raise exception 'Peel Sealed statuses cannot be verified'; end if;
-  if exists (select 1 from unnest(friend_ids) f where not public.are_friends(me, f)) then
+  if exists (select 1 from unnest(friend_ids) f where not private.are_friends(me, f)) then
     raise exception 'validators must be your friends';
   end if;
   select id into v_id from public.verifications where user_id = me and state <> 'expired';
@@ -298,7 +300,7 @@ create function public.get_invite_preview(invite_token text)
 returns table (owner_name text, owner_photo_url text, status public.banana_status, valid boolean)
 language sql stable security definer set search_path = '' as $$
   select p.name, p.photo_url, v.status,
-         (i.state in ('pending', 'claimed') and v.state <> 'expired')
+         (i.state <> 'revoked' and v.state <> 'expired')
   from public.validator_invites i
   join public.verifications v on v.id = i.verification_id
   join public.profiles p on p.id = i.owner_id
@@ -319,7 +321,7 @@ begin
   select * into v from public.verifications where id = inv.verification_id;
   if inv.owner_id = me then raise exception 'you cannot vouch for yourself'; end if;
   if inv.state = 'revoked' or v.state = 'expired' then raise exception 'this invite is no longer active'; end if;
-  if public.is_blocked_between(inv.owner_id, me) then raise exception 'this invite is no longer active'; end if;
+  if private.is_blocked_between(inv.owner_id, me) then raise exception 'this invite is no longer active'; end if;
   if inv.validator_id is not null and inv.validator_id <> me then raise exception 'this invite was already used by someone else'; end if;
   if inv.validator_id is null then
     if exists (select 1 from public.validator_invites where verification_id = inv.verification_id and validator_id = me and state <> 'revoked') then
@@ -368,7 +370,7 @@ begin
 
   select count(*) into yes_count
   from public.validator_responses r join public.validator_invites i on i.id = r.invite_id
-  where i.verification_id = v.id and i.state = 'answered' and r.answer = 'yes';
+  where i.verification_id = v.id and r.answer = 'yes';
 
   if yes_count >= 3 and v.state = 'collecting' then
     update public.verifications set state = 'certified', certified_at = now() where id = v.id;
@@ -384,7 +386,7 @@ returns table (verification_id uuid, status public.banana_status, state public.v
 language sql stable security definer set search_path = '' as $$
   select v.id, v.status, v.state,
     (select count(*)::int from public.validator_responses r join public.validator_invites i on i.id = r.invite_id
-      where i.verification_id = v.id and i.state = 'answered' and r.answer = 'yes'),
+      where i.verification_id = v.id and r.answer = 'yes'),
     3, v.certified_at
   from public.verifications v
   where v.user_id = auth.uid() and v.state <> 'expired';
@@ -397,6 +399,7 @@ language plpgsql stable security definer set search_path = '' as $$
 declare
   me uuid := auth.uid();
   digits text := regexp_replace(coalesce(q, ''), '\D', '', 'g');
+  term text := ltrim(trim(coalesce(q, '')), '@');
 begin
   if me is null then raise exception 'not authenticated'; end if;
   if length(digits) >= 7 and q !~ '[a-zA-Z_]' then
@@ -405,14 +408,14 @@ begin
       select p.id, p.username::text, p.name, p.photo_url
       from public.profiles p join auth.users u on u.id = p.id
       where u.phone = digits and p.id <> me and p.username is not null
-        and not public.is_blocked_between(p.id, me);
-  elsif length(trim(q)) >= 2 then
+        and not private.is_blocked_between(p.id, me);
+  elsif length(term) >= 2 then
     return query
       select p.id, p.username::text, p.name, p.photo_url
       from public.profiles p
       where p.id <> me and p.username is not null
-        and (p.username ilike trim(q) || '%' or p.name ilike '%' || trim(q) || '%')
-        and not public.is_blocked_between(p.id, me)
+        and (p.username ilike term || '%' or p.name ilike '%' || term || '%')
+        and not private.is_blocked_between(p.id, me)
       order by p.username limit 20;
   end if;
 end;
@@ -425,7 +428,7 @@ language sql stable security definer set search_path = '' as $$
   select p.id, p.username::text, p.name, p.photo_url, u.phone::text
   from auth.users u join public.profiles p on p.id = u.id
   where u.phone = any (phones) and p.id <> auth.uid() and p.username is not null
-    and not public.is_blocked_between(p.id, auth.uid())
+    and not private.is_blocked_between(p.id, auth.uid())
   limit 500;
 $$;
 
@@ -435,9 +438,9 @@ returns table (friendship_id uuid, id uuid, username text, name text, photo_url 
                status public.banana_status, certified_at timestamptz, changed_at timestamptz)
 language sql stable security definer set search_path = '' as $$
   select f.id, p.id, p.username::text, p.name, p.photo_url, p.bio,
-         case when public.can_see_status(p.id, auth.uid()) then s.status end,
-         case when public.can_see_status(p.id, auth.uid()) then s.certified_at end,
-         case when public.can_see_status(p.id, auth.uid()) then s.changed_at end
+         case when private.can_see_status(p.id, auth.uid()) then s.status end,
+         case when private.can_see_status(p.id, auth.uid()) then s.certified_at end,
+         case when private.can_see_status(p.id, auth.uid()) then s.changed_at end
   from public.friendships f
   join public.profiles p on p.id = case when f.requester_id = auth.uid() then f.addressee_id else f.requester_id end
   join public.statuses s on s.user_id = p.id
@@ -467,19 +470,19 @@ alter table public.validator_responses enable row level security;
 alter table public.notifications enable row level security;
 
 create policy "profiles readable unless blocked" on public.profiles for select to authenticated
-  using (id = auth.uid() or not public.is_blocked_between(id, auth.uid()));
+  using (id = auth.uid() or not private.is_blocked_between(id, auth.uid()));
 create policy "update own profile" on public.profiles for update to authenticated
   using (id = auth.uid()) with check (id = auth.uid());
 
 create policy "status visible per owner's choice" on public.statuses for select to authenticated
-  using (public.can_see_status(user_id, auth.uid()));
+  using (private.can_see_status(user_id, auth.uid()));
 create policy "update own status" on public.statuses for update to authenticated
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 create policy "see own friendships" on public.friendships for select to authenticated
   using (auth.uid() in (requester_id, addressee_id));
 create policy "send friend request" on public.friendships for insert to authenticated
-  with check (requester_id = auth.uid() and state = 'pending' and not public.is_blocked_between(requester_id, addressee_id));
+  with check (requester_id = auth.uid() and state = 'pending' and not private.is_blocked_between(requester_id, addressee_id));
 create policy "accept friend request" on public.friendships for update to authenticated
   using (addressee_id = auth.uid() and state = 'pending') with check (addressee_id = auth.uid() and state = 'accepted');
 create policy "remove friendship" on public.friendships for delete to authenticated
@@ -521,12 +524,17 @@ grant select (id, verification_id, owner_id, label, token, validator_id, created
 revoke execute on all functions in schema public from public, anon;
 grant execute on all functions in schema public to authenticated;
 grant execute on function public.get_invite_preview(text) to anon;
+revoke execute on all functions in schema private from public, anon;
+grant usage on schema private to authenticated;
+grant execute on all functions in schema private to authenticated;
 revoke execute on function public.handle_new_user(), public.handle_block(), public.handle_friendship_change(), public.handle_status_change() from authenticated;
 
 -- Avatars bucket: public read, users write only their own folder.
 insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict do nothing;
 create policy "avatar upload own folder" on storage.objects for insert to authenticated
   with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+create policy "avatar read own folder" on storage.objects for select to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "avatar update own folder" on storage.objects for update to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
 create policy "avatar delete own folder" on storage.objects for delete to authenticated
