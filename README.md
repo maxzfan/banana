@@ -1,56 +1,32 @@
-# Welcome to your Expo app 👋
+# Banana 🍌
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Mobile-first social app for friend-verified relationship status. Expo (SDK 58, Expo Router) + Supabase (auth, Postgres + RLS, realtime, storage).
 
-## Get started
+## Local setup
 
-1. Install dependencies
-
-   ```bash
-   npm install
-   ```
-
-2. Start the app
-
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+Requires Node 22, Docker and the Supabase CLI.
 
 ```bash
-npm run reset-project
+npm install
+supabase start                 # local Supabase in Docker
+cp .env.example .env.local     # fill in the publishable key printed by `supabase status`
+npx expo start                 # press w for web, or scan the QR code with Expo Go
 ```
 
-This command will move the starter code to the **example** directory and create a blank **src/app** directory where you can start developing.
+Sign in with a test number `+1 555 000 0001` … `0006`; the code is always `123456` (see `supabase/config.toml`). Real SMS needs Twilio credentials in the `[auth.sms.twilio]` section.
 
-### Other setup steps
+Invite links use `EXPO_PUBLIC_INVITE_BASE_URL` (set it to the production domain, e.g. `https://banana.app`, which should serve the web build so `/i/<token>` opens the invite page).
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+## Tests
 
-## Learn more
+```bash
+supabase db reset && node --test tests/backend.test.mjs   # auth, friends, Bunch verification, privacy
+supabase db reset && node --test tests/social.test.mjs    # Banana Split, Going Bananas, chat
+supabase db reset && node tests/seed-social.mjs           # demo data: Ann + Bob Certified Ripe
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Layout
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- `supabase/migrations/` — schema, RLS policies and RPCs (validator answers and set-up decisions are never readable by clients)
+- `src/app/` — Expo Router screens: `(auth)`, `(tabs)` (Home, Friends, Bunch, Inbox, Me), `i/[token]` invite landing, `survey/[id]`, `setup/new`, `chat/[id]`, `tonight`, `settings`
+- `src/components/` — banana UI kit (sticker badge, peel animation, status chips)
