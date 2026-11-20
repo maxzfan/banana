@@ -182,26 +182,24 @@ begin
     update public.setups set b_decision = decision where id = setup returning * into s;
   end if;
   if s.a_decision = 'accept' and s.b_decision = 'accept' and not private.is_blocked_between(s.person_a, s.person_b) then
-    -- Already matched through another suggestion: reuse that chat.
+    -- Already matched through another suggestion with a live chat: reuse it.
     select o.chat_id into new_chat from public.setups o
-    where o.id <> s.id and o.matched_at is not null
+    where o.id <> s.id and o.matched_at is not null and o.chat_id is not null
       and least(o.person_a, o.person_b) = least(s.person_a, s.person_b) and greatest(o.person_a, o.person_b) = greatest(s.person_a, s.person_b)
     limit 1;
-    if found then
-      update public.setups set matched_at = now(), chat_id = new_chat where id = setup;
-      return true;
+    if new_chat is null then
+      insert into public.chats (kind) values ('setup') returning id into new_chat;
+      insert into public.chat_members (chat_id, user_id) values (new_chat, s.person_a), (new_chat, s.person_b);
+      insert into public.notifications (user_id, kind, actor_id, payload)
+      values (s.person_a, 'setup_matched', s.person_b, jsonb_build_object('chat_id', new_chat)),
+             (s.person_b, 'setup_matched', s.person_a, jsonb_build_object('chat_id', new_chat));
     end if;
-    insert into public.chats (kind) values ('setup') returning id into new_chat;
-    insert into public.chat_members (chat_id, user_id) values (new_chat, s.person_a), (new_chat, s.person_b);
     update public.setups set matched_at = now(), chat_id = new_chat where id = setup;
     if s.matchmaker_id is not null then
       update public.profiles set setups_made = setups_made + 1 where id = s.matchmaker_id;
       insert into public.notifications (user_id, kind, actor_id, payload)
       values (s.matchmaker_id, 'setup_success', s.person_a, jsonb_build_object('setup_id', setup, 'other_id', s.person_b));
     end if;
-    insert into public.notifications (user_id, kind, actor_id, payload)
-    values (s.person_a, 'setup_matched', s.person_b, jsonb_build_object('chat_id', new_chat)),
-           (s.person_b, 'setup_matched', s.person_a, jsonb_build_object('chat_id', new_chat));
     return true;
   end if;
   return false;

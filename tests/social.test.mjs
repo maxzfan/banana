@@ -92,6 +92,7 @@ test('banana split, going bananas, chat', async () => {
   ok(await ann.c.rpc('respond_setup', { setup: s3, decision: 'accept' }));
   assert.equal(ok(await bob.c.rpc('respond_setup', { setup: s3, decision: 'accept' })), true);
   assert.equal(ok(await bob.c.rpc('my_chats')).filter((c) => c.kind === 'setup').length, 1, 'second suggestion reuses the chat');
+  assert.equal(ok(await dee.c.from('profiles').select('setups_made').eq('id', dee.id))[0].setups_made, 1, 'second matchmaker credited');
   const maxProfile = ok(await max.c.from('profiles').select('setups_made').eq('id', max.id).single());
   assert.equal(maxProfile.setups_made, 1);
   const maxNotes = ok(await max.c.from('notifications').select('kind').eq('kind', 'setup_success'));
