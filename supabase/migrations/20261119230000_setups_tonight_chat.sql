@@ -227,20 +227,22 @@ declare
   me uuid := auth.uid();
   new_id uuid;
   plan_chat uuid;
+  old_audience public.tonight_audience;
 begin
   if me is null then raise exception 'not authenticated'; end if;
   if expires_at <= now() or expires_at > now() + interval '28 hours' then
     raise exception 'tonight must end within the next day';
   end if;
   -- Editing an active plan keeps its RSVPs and group chat; an expired one starts fresh.
+  select t.audience into old_audience from public.tonight_posts t where t.user_id = me and t.expires_at > now();
   update public.tonight_posts t set note = nullif(trim(set_tonight.note), ''), audience = set_tonight.audience, expires_at = set_tonight.expires_at
   where t.user_id = me and t.expires_at > now() returning t.id, t.chat_id into new_id, plan_chat;
-  if new_id is not null then
-    -- A narrower audience drops guests who no longer qualify.
+  if new_id is not null and old_audience is distinct from set_tonight.audience then
+    -- Changing the audience drops guests who no longer qualify.
     delete from public.tonight_joins j where j.post_id = new_id and not private.can_see_tonight(me, set_tonight.audience, j.user_id);
     delete from public.chat_members cm where cm.chat_id = plan_chat and cm.user_id <> me
       and not private.can_see_tonight(me, set_tonight.audience, cm.user_id);
-  else
+  elsif new_id is null then
     delete from public.tonight_posts where user_id = me;
     insert into public.tonight_posts (user_id, note, audience, expires_at)
     values (me, nullif(trim(note), ''), audience, expires_at) returning id into new_id;
