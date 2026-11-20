@@ -147,6 +147,13 @@ test('banana split, going bananas, chat', async () => {
   ok(await max.c.rpc('set_tonight', { note: 'drinks at 9', audience: 'friends', expires_at: tomorrow4am }));
   ok(await cyd.c.rpc('join_tonight', { post: post2 }));
 
+  // Unfriending removes Cyd from Max's Tonight chat.
+  ok(await max.c.from('friendships').delete().or(`requester_id.eq.${cyd.id},addressee_id.eq.${cyd.id}`));
+  assert.equal(ok(await cyd.c.from('messages').select('id').eq('chat_id', tChat)).length, 0);
+  assert.ok((await cyd.c.from('messages').insert({ chat_id: tChat, sender_id: cyd.id, body: 'hi?' })).error);
+  await befriend(max, cyd);
+  ok(await cyd.c.rpc('join_tonight', { post: post2 }));
+
   // Bunch-only: Cyd is in Ann's Bunch, Bob is not.
   ok(await ann.c.rpc('set_tonight', { note: null, audience: 'bunch', expires_at: tomorrow4am }));
   await befriend(ann, bob);

@@ -349,6 +349,22 @@ $$;
 create trigger on_block_close_chats after insert on public.blocks
   for each row execute function public.handle_block_chats();
 
+-- Unfriending removes each person from the other's Tonight plans and chats.
+create function public.handle_unfriend_tonight() returns trigger
+language plpgsql security definer set search_path = '' as $$
+begin
+  delete from public.chat_members cm using public.chats c
+  where cm.chat_id = c.id and c.kind = 'tonight'
+    and ((c.host_id = old.requester_id and cm.user_id = old.addressee_id) or (c.host_id = old.addressee_id and cm.user_id = old.requester_id));
+  delete from public.tonight_joins j using public.tonight_posts t
+  where j.post_id = t.id and ((t.user_id = old.requester_id and j.user_id = old.addressee_id)
+                           or (t.user_id = old.addressee_id and j.user_id = old.requester_id));
+  return old;
+end;
+$$;
+create trigger on_unfriend_leave_tonight after delete on public.friendships
+  for each row execute function public.handle_unfriend_tonight();
+
 -- Row-level security ------------------------------------------------------
 
 alter table public.chats enable row level security;
